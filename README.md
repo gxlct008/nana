@@ -5,20 +5,19 @@
 
 [English Document](README_en.md)
 
-`openresty` 是一个为高并发设计的异步非阻塞架构，而 `nana` 是基于 `openresty` 的 `restful api` 的 `MVC` 框架，项目集成了多个组件，目前支持丰富的功能。
+`openresty` 是一个为高并发设计的异步非阻塞架构，而 `nana` 是基于 `openresty` 的 `api` 框架。
 
 目录
 
 ====
 
+* [快速上手](#快速上手)
+* [压力测试](#压力测试)
 * [安装](#安装)
   * [使用 docker 安装](#使用-docker-安装)
   * [手动安装](#手动安装)
-* [快速上手](#快速上手)
-* [压力测试](#压力测试)
 * [文档](#文档)
   * [配置](#配置)
-  * [本地化](#本地化)
   * [路由](#路由)
   * [中间件](#中间件)
   * [控制器](#控制器)
@@ -41,80 +40,120 @@
   * [Helper Function](#Helper-Function)
   * [代码规范](#代码规范)
 * [用户 Auth API 接口说明](#用户-Auth-API-接口说明)
-* [qq群 284519473](#qq群-284519473)
 * [联系作者](#联系作者)
-
-## 安装
-
-### 使用 docker 安装
-
-* 执行 `cp env.example.lua env.lua` 其中 `mysql_host` 是数据库地址，`db_name` 是数据库名， `mysql_user` 是数据库的用户名，`mysql_password` 数据库密码，`env` 用来在项目里判断环境，`env.lua` 不随版本库提交，可以帮助区分线上和本地环境的不同配置
-* 构建 `docker build -t nana .`
-* 运行 `docker run -p 80:80 --name=nana -v /host/path/nana:/app -d nana` 生产环境不需要 `mount` 到 `/app`，开发环境这样做较方便调试
-
-### 手动安装
-
-* `git clone https://github.com/horan-geeker/nana.git`
-* 同上执行 `cp env.example.lua env.lua` 并配置其中的 `mysql redis`
-* 配置 `nginx`，将 `content_by_lua_file` 指到框架的入口文件 `bootstrap.lua`，项目中的 `nginx/conf/nginx.conf` 文件主要用于 `docker` 环境，你可以参考来配置 `openresty`
 
 ## 快速上手
 
 > routes.lua
 
 ```lua
-
-function _M:match(route)
-    -- add below
-    route:get('/index', 'index_controller', 'index')
-end
+route:get('/index', 'index_controller', 'index')
 ```
 
 > controllers/index_controller.lua
 
 ```lua
-local request = require("lib.request")
 local response = require("lib.response")
 
 local _M = {}
 
-function _M:index()
-    local args = request:all() -- get all args
-    return response:json(0, 'request args', args) -- return response 200 and json content
+function _M:index(request)
+    return response:json(0, 'request args', request.params) -- return response 200 and parse request params to json output
 end
 
 return _M
 
 ```
 
-## 压力测试
-
-### 单次 mysql 数据库查询
-
-#### mac 4核 i7 16G 内存 固态硬盘
+> 访问结果
 
 ```shell
-ab -c 100 -n 10000 -k http://nana/user/1
+curl https://api.lua-china.com/index?id=1&foo=bar
 
----
-Requests per second:    3125.76 [#/sec] (mean)
-Time per request:       31.992 [ms] (mean)
----
+{
+    "msg": "request args",
+    "status": 0,
+    "data": {
+        "foo": "bar",
+        "id": "1"
+    }
+}
 ```
+
+## 压力测试
+
+### 绑定一个 CPU
+
+wrk -t1 -c 100 -d10s http://localhost:60000/
+
+```shell
+Running 10s test @ http://localhost:60000/
+  1 threads and 100 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     3.70ms    4.23ms  29.84ms   82.74%
+    Req/Sec    43.31k     2.63k   48.61k    82.00%
+  431043 requests in 10.02s, 97.01MB read
+Requests/sec:  43024.54
+Transfer/sec:      9.68MB
+```
+
+内存基本没有变化，单 CPU 打满
+
+#### 对比 lor 框架
+
+wrk -t1 -c 100 -d10s http://localhost:60004/hello
+
+```
+Running 10s test @ http://localhost:60004/hello
+  1 threads and 100 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     5.01ms  621.83us  14.66ms   92.35%
+    Req/Sec    20.02k     0.96k   21.35k    78.00%
+  199275 requests in 10.01s, 46.94MB read
+Requests/sec:  19898.67
+Transfer/sec:      4.69MB
+```
+
+#### 对比 golang gin 框架
+
+```shell
+wrk -t1 -c 100 -d10s http://localhost:60002/ping
+
+Running 10s test @ http://localhost:60002/ping
+  1 threads and 100 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     8.05ms   10.04ms  78.14ms   85.71%
+    Req/Sec    20.39k     3.19k   26.53k    68.00%
+  203091 requests in 10.02s, 27.31MB read
+Requests/sec:  20260.14
+Transfer/sec:      2.72MB
+```
+
+## 安装
+
+### 手动安装
+
+* `git clone https://github.com/horan-geeker/nana.git`
+* 执行 `cp env.example.lua env.lua`
+* 配置 `nginx`，配置 `lua_package_path '/path/to/nana/?.lua;;';` 指向 nana 的根目录， `content_by_lua_file` 指到框架的入口文件 `/path/to/nana/bootstrap.lua`
 
 ## 文档
 
 ### 项目配置
 
 * 项目的配置文件主要放在 `config/app.lua`
-* 状态码的配置文件主要放在 `config/status.lua`
-
-### 本地化
-
-通过给 `ngx.ctx.locale` 赋值来更换语言环境，如：
-`ngx.ctx.locale = zh`
+* 数据库配置文件 `config/database.lua`
+* 接口状态码的配置文件 `config/status.lua`
 
 ### 路由
+
+> 路由配置文件在项目根目录 `routes.lua`，如使用`POST`请求访问 `http://your-app.test/login` 时，会交给 `auth_controller` 下的 `login(request)` 函数来处理，并且会将 `request` 注入 `login` 方法：
+
+```lua
+route:post('/login', 'auth_controller', 'login')
+```
+
+> 框架内核使用 `trie` 字典树实现路由结构，算法复杂度 O(1)，可以高效的匹配路由
 
 #### 支持 http 请求类型
 
@@ -125,44 +164,46 @@ Time per request:       31.992 [ms] (mean)
 * DELETE
 * HEAD
 
-> 路由文件在项目根目录 `routes.lua`，如使用`POST`请求访问 `/login` 的 uri 时，交给 `auth_controller` 下的 `login()` 函数来处理：
+#### 路由参数
+
+当需要使用 url 来获取参数时，你可以这样写路由配置，id 会传到对应的 show() 方法里
 
 ```lua
-route:post('/login', 'auth_controller', 'login')
+route:get('/users/{id}', 'user_controller', 'show')
+```
+
+#### 多个参数
+
+使用花括号来代表传递的参数，如：  
+
+```lua
+route:get("/users/{user_id}/comments/{comment_id}", 'user_controller', 'comments')
+```
+
+可匹配`/users/1/comments/2`，在`comments action`里，直接写上两个参数即可，命名不进行约束，最后一个参数是框架注入的 request
+
+```lua
+function _M:comments(user_id, comment_id, request)
+    ...
+end
 ```
 
 #### 路由群组
 
-路由群组目前主要的作用是使用中间件来解决一些问题，比如下边需要在 `注销` 和 `重置密码` 的时候验证用户需要处于登录态，利用路由中间件只需要在路由群组的地方写一句就ok了，这样就会在调用 `controller` 之前先调用 `middleware > authenticate.lua` 的 `handle()` 方法：
+路由群组主要用来定义一群 uri 的公共属性，目前支持群组中间件，比如下边需要在 `注销` 和 `重置密码` 的时候验证用户需要处于登录态，利用路由中间件只需要在中间件进行鉴权，这里会在调用 `controller` 之前先调用 `middleware > authenticate.lua` 的 `handle()` 方法来对用户进行鉴权，这样就不用在每个 `controller` 的方法里都进行鉴权操作了：
 
 ```lua
 route:group({
-        'authenticate',
+        middleware = {'authenticate'},
     }, function()
-        route:post('/logout', 'auth_controller', 'logout') -- http_method/uri/controller/action
+        route:post('/logout', 'auth_controller', 'logout') -- route:http_method(uri, controller, action)
         route:post('/reset-password', 'user_controller', 'resetPassword')
     end)
 ```
 
-#### 动态路由
-
-使用花括号来代表传递的参数，如：  
-`route:get("/users/{user_id}/comments/{comment_id}", 'user_controller', 'comments')`
-可匹配`/users/1/comments/2`，在`comments action`里，直接写上两个参数即可，命名不进行约束
-
-```lua
-function _M:comments(user_id, comment_id)
-    ngx.log(ngx.ERR, user_id, comment_id)
-    return:response:json(0, 'comments', {user_id=user_id, comment_id=comment_id})
-end
-```
-
-可以参考`routes.lua`里边已有的路由，也可以任意修改里边已有的东西
-
 ### 中间件
 
-> 中间件都需要写在 `middleware` 文件夹下，并且需要写上命名为 `handle()` 的方法
-`中间件` 的设计模式解决了代码的复用，我们可以在中间件中自定义自己的东西，如`middleware > authenticate.lua`
+> 中间件都需要写在 `middleware` 文件夹下，并且需要写上命名为 `handle()` 的方法 `中间件` 的设计模式解决了代码的复用，我们可以在中间件中自定义自己的逻辑，如`middleware > authenticate.lua`
 
 ```lua
 function _M:handle()
@@ -170,7 +211,6 @@ function _M:handle()
         return false, response:json(4,'no authorized in authenticate')
     end
 end
-
 ```
 
 当返回 false 的时候会直接返回第二个 `response` 参数，从而不再执行 `controller` 的内容，当返回 true 的时候继续执行，你可以把你自定义的中间件写到 `middleware` 的文件夹下, 该文件夹下已有了一个示例中间件 `example_middleware.lua`
@@ -179,33 +219,21 @@ end
 
 在路由匹配的`uri`，第二个参数就是控制器的路径，默认都是在`controllers`文件夹下的文件名称，第三个参数是对应该文件的方法，可在方法中返回 response 响应。
 
-#### Service
-
-在项目逻辑较为复杂的情况下，可复用的情况也比较普遍，`controller`里如果有可以抽离出来的逻辑，我们可以把这部分写在`service`里（对应项目中`services文件夹`），其实如果严格规范的开发`controller`只对http请求进行处理，例如对参数的验证，返回`json`的格式等，而不用去处理商业逻辑，商业逻辑可以写在 `service` 里，再从 `controller` 中调用，可以写出更清晰的代码，也方便将来单元测试
-
 ### Request
+
+默认情况下框架会将 request 注入到 controller 的 action 中的最后一个参数，目前包含
+
+* request.params 请求参数
+* request.headers 请求头集合
+* request.method 请求方法类型
+* request.uri 请求 uri
 
 #### 参数获取
 
-```
+```lua
 local request = require("lib.request")
 local args = request:all() -- 拿到所有参数，同时支持 get post 以及其他 http 请求
 args.username -- 拿到username参数
-```
-
-#### 发起 http 请求
-
-使用了这个开源组件 https://github.com/pintsized/lua-resty-http
-
-```lua
-local http = require('lib.http')
-local httpc = http.new()
-local res, err = httpc:request_uri(url, {ssl_verify=false}) -- https 的请求出现异常可以带上这个参数，但是确保你是安全的
-if not res then
-    ngx.log(ngx.ERR, res, err)
-    return res, err
-end
-local data = cjson.decode(res.body)
 ```
 
 ### Response
@@ -213,7 +241,7 @@ local data = cjson.decode(res.body)
 框架使用的 `lib/response.lua` 中的 `json` 方法通过定义数字来代表不同的`response`类型，该方法支持三四个参数
 
 1. 第一个参数是状态码，16进制状态码对应 `config/status.lua`
-2. 第二个参数是错误码文案，文案根据第一个参数对应 `config/status.lua` 中的文案
+2. 第二个参数是错误码文案，默认值是根据第一个参数对应 `config/status.lua` 中的文案
 3. 第三个参数是需要向前端返回的数据，可省略
 4. 第四个参数是返回的 `http 状态码`，可省略，默认是200
 
@@ -221,9 +249,9 @@ local data = cjson.decode(res.body)
 return response:json(0x000000, 'success message', data, 200)
 --[[
 {
-"msg": "success message",
-"status": 0,
-"data": {}
+    "msg": "success message",
+    "status": 0,
+    "data": {}
 }
 --]]
 ```
@@ -234,16 +262,16 @@ return response:json(0x000000, 'success message', data, 200)
 return response:json(0x000001)
 --[[
 {
-"msg": "验证错误",
-"status": 1,
-"data": {}
+    "msg": "验证错误",
+    "status": 1,
+    "data": {}
 }
 --]]
 ```
 
 当然你可以在 `config > status.lua` 中可以增加返回状态码
 
-#### 定义全局 response 结构
+#### 定义 response json 协议
 
 在 `config` 目录下的 `status.lua` 定义了返回的 `status` 和 `msg` 内容，默认返回的格式是 `{"status":0,"message":"ok","data":{}}` 你可以通过修改 `lib/response.lua` 的 `json` 方法来自定义不同的结构
 
@@ -262,17 +290,16 @@ local ok,msg = validator:check(args, {
 
 ### Cookie
 
-在 `lib/helpers.lua` 中包含了 `cookie` 的辅助方法，全局已经引用了该文件，可以直接使用函数
+在 `lib/helpers.lua` 中包含了 `cookie` 的辅助方法
 
 ```lua
-set_cookie(key, value, expire) -- expire 是可选参数，单位是时间戳，精确到秒
-get_cookie(key)
+helpers.set_cookie(key, value, expire) -- expire 是可选参数，单位是时间戳，精确到秒
+helpers.get_cookie(key)
 ```
 
 ### 数据库操作 ORM
 
 > 默认的数据库操作都使用了 `ngx.quote_sql_str` 处理了 `sql注入问题`
-以下增删改查都需要先获取模型 `table` 可类比 `class`
 
 ```lua
 -- 获取模型，模型的表名对应 `models/user.lua` 中 `Model:new()` 的第一个参数 `users`  
@@ -459,7 +486,7 @@ local posts_with_tag = Post:where('id', '=', 1):with('tag'):first()
 
 #### 读写分离
 
-通过配置 `config/database.lua` 文件中 `mysql_config.READ` 和 `mysql_config.WRITE` 框架会根据 model 的操作自动分配读写，如果不做分离则配置为相同的
+通过配置 `config/database.lua` 文件中 `mysql.READ` 和 `mysql.WRITE` 框架会根据 model 的操作自动分配读写，如果不做分离则配置为相同的
 
 > 由于主从同步是异步的，业务中先写后读的话，默认都会去主库查询，保证数据写入后能立即查询
 
@@ -485,7 +512,7 @@ end
 #### resty redis
 
 系统也引用了`resty redis`
-`local restyRedis = require('lib.resty_redis')`
+`local resty_redis = require('lib.resty_redis')`
 
 ### 综合
 
@@ -502,8 +529,6 @@ end
 `random.number(1000, 9999)`
 
 ### Helper Function
-
-`lib/helpers.lua` 中 `init()` 方法将帮助函数加载到了全局 `_G` 表，你可以在里边自行定义自己的帮助方法
 
 #### 反转 table
 
@@ -524,17 +549,60 @@ table_remove(tab, {'item1', 'item2'})
 > lua 中的`hash table`按`key`排序与其他语言不同，我们需要自己实现一个迭代器来遍历排好序的`table`
 
 ```lua
-for k,v in pairsByKeys(hashTable) do
-    ...
-end
+sort_by_key(hashTable)
 ```
 
 ## 代码规范
+
+### Service
+
+在项目逻辑较为复杂的情况下，可复用的情况也比较普遍，`controller`里如果有可以抽离出来的逻辑，我们可以把这部分写在`service`里（放置在项目根目录 `services` 文件夹），其实如果严格规范的开发`controller`只对http请求进行处理，例如对参数的验证，返回`json`的格式等，而不用去处理商业逻辑，商业逻辑可以写在 `service` 里，再从 `controller` 中调用，可以写出更清晰的代码，也方便将来单元测试
+
+### 命名规范
 
 * 变量名和函数名均使用下划线风格
 * 与数据库相关模型变量名采用大写字母开头的驼峰
 
 ## 用户 Auth API 接口说明
+
+```lua
+route:group({
+    'locale',
+    'throttle'
+}, function()
+    route:post('/login', 'auth_controller', 'login')
+    route:get('/users/{id}', 'user_controller', 'show')
+    route:post('/register', 'auth_controller', 'register')
+    route:patch('/forget-password', 'auth_controller', 'forget_password')
+    route:group({
+        'authenticate',
+    }, function()
+        route:post('/logout', 'auth_controller', 'logout')
+        route:patch('/reset-password', 'auth_controller', 'reset_password')
+        route:group({
+            'token_refresh'
+        }, function()
+            route:get('/userinfo', 'user_controller', 'userinfo')
+        end)
+    end)
+end)
+```
+
+为了方便快速建立一套用户中心服务，框架自带了完整的 mysql 数据表，模型，控制器和路由配置（参考 auth 分支）
+
+```mysql
+CREATE TABLE IF NOT EXISTS `users` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `nickname` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `phone` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `password` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `avatar` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
 
 > 所有接口均返回json数据，(你也可以更加你已有的数据库更改模型) `users` 是用户表名，`phone` 用于登录的列名，并且在根目录执行 `chmod 755 install.sh && ./install.sh` 迁移数据库结构。
 
@@ -705,7 +773,10 @@ curl "http://localhost:8888/userinfo"
 }
 ```
 
-## qq群 284519473
+## todo
+
+* 做为网关来使用的情况下处理业务
+* 增加框架级别 exception
 
 ## 联系作者
 

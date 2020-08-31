@@ -1,116 +1,196 @@
-local cjson = require('cjson')
-local response = require('lib.response')
-local database = require('lib.database')
-local controller_prefix = 'controllers.'
-local middleware_prefix = 'middleware.'
+local ngx_re = require("ngx.re")
+local ngx = ngx
+local new_tab = require('table.new')
+local response = require("lib.response")
+local trie = require("lib.trie")
 
-local _M = {}
+local _M = {
+    controller_prefix = 'controllers',
+    middleware_prefix = 'middleware',
+    routes = {
+        GET = trie:new(),
+        POST = trie:new(),
+        PUT = trie:new(),
+        DELETE = trie:new(),
+        PATCH = trie:new(),
+        OPTIONS = trie:new(),
+    },
+    middlewares = new_tab(1000, 0) -- table.new performance better than `{}` dynamic array at most case
+}
 
-local function route_match(route_url, http_url)
-    local new_router_url, n, err = ngx.re.gsub(route_url, '\\{[\\w]+\\}', '(\\d+)')
-    new_router_url = '^' .. new_router_url .. '$'
-    local captures, err = ngx.re.match(http_url, new_router_url, 'jo')
-    if captures then
-        captures[0] = nil;
-        return true, captures
+local function split_uri(uri)
+    if uri == '/' or uri == '' then
+        return {'/'}
+    end
+    local uris, err = ngx_re.split(uri, '/')
+    if err ~= nil then
+        ngx.log(ngx.ERR, err)
+        return {}
+    end
+    local result = new_tab(1000, 0)
+    local index = 1
+    for _,v in ipairs(uris) do
+        if v ~= '' then
+            result[index] = v -- use index to add item performance better table.insert
+            index = index + 1
+        end
+    end
+    return result
+end
+
+local function route_match(route_tree, http_uris)
+    local params = {}
+    for _, uri in ipairs(http_uris) do
+        local tree, param = route_tree:find_child_by_key(uri)
+        if params ~= nil then
+            table.insert(params, param)
+        end
+        if not tree then
+            return false
+        end
+        route_tree = tree
+    end
+    if route_tree.value ~= nil then
+        return true, route_tree.value, params
     end
     return false
 end
 
-local function find_action(controller, action)
-    if type(require(controller_prefix..controller)) ~= 'table' then
-        return nil, 'system error, controller not a table'
-    end
-    local action = require(controller_prefix..controller)[action]
-    if action == nil then
-        return nil, 'system error, this action function not exist'
-    end
-    return action, nil
+
+local function options_http_process()
+    return nil, nil, response:raw(200)
 end
 
-function _M:init()
-    ngx.ctx.middleware_group = {}
-    require('routes'):match(self)
-    return ngx.exit(ngx.HTTP_NOT_FOUND)
-end
 
-function _M:send_response(content, status)
-    database:close()
-    if content ~= nil then
-        ngx.say(content)
-    end
-    ngx.exit(status)
-end
-
-function _M:call_action(method, uri, controller, action)
-    local matched, params = route_match(purge_uri(uri), purge_uri(ngx.var.request_uri))
-    if matched then
-        if method == ngx.var.request_method then
-            if ngx.ctx.middleware_group then
-                for _,middleware in ipairs(table_reverse(ngx.ctx.middleware_group)) do
-                    local result, response_content, resposne_status = require(middleware_prefix..middleware):handle()
-                    if result == false then
-                        return self:send_response(response_content, resposne_status)
-                    end
-                end
-            end
-            if controller then
-                called_action, err = find_action(controller, action)
-                if err ~= nil then
-                    return self:send_response(response:error(err))
-                end
-                local response_content, resposne_status = called_action(nil, table.unpack(params))
-                return self:send_response(response_content, resposne_status)
-            else
-                return ngx.log(ngx.WARN, 'upsteam api')
-            end
-        else
-            if ngx.var.request_method == 'OPTIONS' then
-                called_action, err = find_action(controller, action)
-                if err ~= nil then
-                    return self:send_response(response:error(err))
-                end
-                return self:send_response(nil, ngx.OK)
-            end
+function _M:match(http_uri, http_method)
+    local uris = split_uri(http_uri)
+    local ok, route, route_params = route_match(self.routes[http_method], uris)
+    if ok then
+        if http_method == 'OPTIONS' then
+            return options_http_process()
         end
-    -- router will throw 404 in router.lua
+        -- return find route with context
+        return route, route_params
     end
+    return nil, nil, response:error(404, {}, 'not found uri')
 end
+
+-- below function process only once in a worker
+
+-- require controller
+function _M:require_controller(controller, action)
+    if controller == nil then
+        return nil, 'system error, define controller can not empty'
+    end
+    if action == nil then
+        return nil, 'system error, define action can not empty'
+    end
+    local controller_path = self.controller_prefix .. '.' .. controller
+    local required_controller = require(controller_path)
+    if type(required_controller) ~= 'table' then
+        return nil, 'system error, controller ' .. controller_path .. ' not a table'
+    end
+    if required_controller[action] == nil then
+        return nil, 'system error, this action ' .. action .. ' function not exist' .. ' in ' .. controller_path
+    end
+    return required_controller
+end
+
+-- require middlewares
+function _M:require_middleware(middlewares)
+    local required_middlewares = {}
+    for _, middleware in ipairs(middlewares) do
+        local middleware_path = self.middleware_prefix .. '.' .. middleware
+        local required_middleware = require(middleware_path)
+        if type(required_middleware) ~= 'table' then
+            return 'system error, middleware ' .. middleware_path .. ' not a table'
+        end
+        table.insert(required_middlewares, required_middleware)
+    end
+    return required_middlewares
+end
+
+-- list table route
+local function generate_route(root_tree, route_uri, route_info)
+    local sub_uris = split_uri(route_uri)
+    local current_tree = root_tree
+    for _, uri in ipairs(sub_uris) do
+        local node = current_tree:find_child_with_pattern(uri)
+        if node == nil then
+            node = trie:new()
+            current_tree:append_child(uri, node)
+        end
+        current_tree = node
+    end
+    current_tree:set_value(route_info)
+end
+
+function _M:add_route(method, uri, controller, action)
+    local required_controller, required_middlewares, err
+    required_controller, err = self:require_controller(controller, action)
+    if err ~= nil then
+        ngx.log(ngx.ERR, err)
+        return
+    end
+    required_middlewares, err = self:require_middleware(self.middlewares)
+    if err ~= nil then
+        ngx.log(ngx.ERR, err)
+        return
+    end
+    local route_info = {
+        required_controller = required_controller,
+        controller = controller,
+        action = action,
+        middlewares = {table.unpack(self.middlewares)}, -- deep copy self.middlewares
+        required_middlewares = required_middlewares,
+    }
+    generate_route(self.routes[method], uri, route_info)
+end
+
 
 function _M:get(uri, controller, action)
-    _M:call_action('GET', uri, controller, action)
+    self:add_route('GET', uri, controller, action)
 end
+
 
 function _M:post(uri, controller, action)
-    _M:call_action('POST', uri, controller, action)
+    self:add_route('POST', uri, controller, action)
 end
+
 
 function _M:put(uri, controller, action)
-    _M:call_action('PUT', uri, controller, action)
+    self:add_route('PUT', uri, controller, action)
 end
+
 
 function _M:patch(uri, controller, action)
-    _M:call_action('PATCH', uri, controller, action)
+    self:add_route('PATCH', uri, controller, action)
 end
+
 
 function _M:delete(uri, controller, action)
-    _M:call_action('DELETE', uri, controller, action)
+    self:add_route('DELETE', uri, controller, action)
 end
+
 
 function _M:head(uri, controller, action)
-    _M:call_action('HEAD', uri, controller, action)
+    self:add_route('HEAD', uri, controller, action)
 end
 
-function _M:group(middleware, func)
-    -- index always be 1 and data will push back one by one
-    for index,middleware_item in ipairs(middleware) do
-        table.insert(ngx.ctx.middleware_group, index, middleware_item)
+
+function _M:group(group_property, func)
+    local current_middlewares = {}
+    if group_property.middleware then
+        current_middlewares = group_property.middleware
+    end
+    -- append tail one by one
+    for _,middleware in ipairs(current_middlewares) do
+        table.insert(self.middlewares, middleware)
     end
     func()
-    -- if not match any route, remove part of middleware
-    for index,middleware_item in ipairs(middleware) do
-        -- remove middleware
-        table.remove(ngx.ctx.middleware_group, index)
+    -- remove tail one by one
+    for _ in ipairs(current_middlewares) do
+        table.remove(self.middlewares, #self.middlewares)
     end
 end
 

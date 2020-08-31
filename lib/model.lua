@@ -1,7 +1,10 @@
 local Database = require('lib.database')
-local cjson = require('cjson')
 local config = require('config.app')
 local database_config = require('config.database')
+local helpers = require('lib.helpers')
+local implode = helpers.implode
+local unique = helpers.unique
+local table_remove = helpers.table_remove
 
 local _M = {}
 
@@ -20,7 +23,6 @@ local database_write = Database:new({
 	timeout = database_config.mysql.timeout,
 	db_pool_timeout = database_config.mysql.pool_timeout,
 	db_pool_size = database_config.mysql.pool_size,
-	time_zone = config.time_zone,
 	db_type = WRITE
 })
 
@@ -34,7 +36,6 @@ local database_read = Database:new({
 	timeout = database_config.mysql.timeout,
 	db_pool_timeout = database_config.mysql.pool_timeout,
 	db_pool_size = database_config.mysql.pool_size,
-	time_zone = config.time_zone,
 	db_type = READ
 })
 
@@ -71,7 +72,7 @@ end
 
 -- return current parent node
 function _M:merge_one_relation(parent, relations)
-	for index, item in pairs(relations) do
+	for _, item in pairs(relations) do
 		if (parent[self.relation.local_key] == item[self.relation.foreign_key]) then
 			parent[self.relation.key_name] = item
 		end
@@ -171,10 +172,15 @@ end
 function _M:orderby(column,operator)
 	local operator = operator or 'asc'
 	if not self.query_sql then
-		self.query_sql = 'order by '.. self.table ..'.'.. column.. ' ' ..operator
+		self.query_sql = 'order by '.. self.table .. '.' .. column .. ' ' ..operator
 	else
-		self.query_sql = self.query_sql..' order by '..column..' '..operator
+		if self.has_order_by then
+			self.query_sql = self.query_sql .. ',' .. column.. ' ' ..operator
+		else
+			self.query_sql = self.query_sql .. ' order by ' .. column.. ' ' ..operator
+		end
 	end
+	self.has_order_by = true
 	return self
 end
 
@@ -353,6 +359,7 @@ function _M:query(sql, type)
 		return ngx.log(ngx.ERR,'query() function need sql to query')
 	end
 	self.query_sql = nil
+	self.has_order_by = false
 	if type == READ then
 		local result, err = database_read:mysql_query(sql)
 		if err ~= nil then
@@ -386,6 +393,7 @@ function _M:new(table, attributes, hidden)
 		attributes = attributes or {},
 		hidden = hidden or {},
 		query_sql = nil,
+		has_order_by = false,
 		relation = {
 			mode = 0
 		},

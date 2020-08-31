@@ -1,14 +1,17 @@
 -- Github Document: https://github.com/horan-geeker/nana
 -- Author:          hejunwei
--- Version:         v0.4.0
 
-local Core = {}
+-- openresty use their own luajit not official luajit at 1.15 version
+-- use ngx api instead of lua api as much as possible
 
-function Core:bootstrap()
-    -- get helper function
-    require('lib.helpers'):init(_G)
-    -- run application
-    require("lib.application"):init():run()
-end
+local application = require("lib.application")
+local http_response = require("lib.response")
 
-Core:bootstrap()
+-- Run our application
+local response = application:run()
+
+-- send response to user
+http_response:send(response)
+
+-- process terminate business
+application:terminate()
